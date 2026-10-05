@@ -1,32 +1,30 @@
-//
-//  CuentasClarasApp.swift
-//  CuentasClaras
-//
-//  Created by Judith Aravena Medina on 04-10-26.
-//
-
 import SwiftUI
 import SwiftData
 
 @main
 struct CuentasClarasApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+    let container: ModelContainer
 
+    init() {
+        let schema = Schema([
+            BankAccount.self,
+            BankStatement.self,
+            AccountSummary.self,
+            CreditLine.self,
+            Transaction.self
+        ])
+        let configuration = ModelConfiguration("CuentasClarasModel")
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            container = try ModelContainer(for: schema, configurations: [configuration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            fatalError("No se pudo crear ModelContainer: \(error)")
         }
-    }()
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            DashboardView()
+                .modelContainer(container)
         }
-        .modelContainer(sharedModelContainer)
     }
 }
