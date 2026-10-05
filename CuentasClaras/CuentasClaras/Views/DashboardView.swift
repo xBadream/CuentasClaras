@@ -1,23 +1,61 @@
 import SwiftUI
+import SwiftData
 
 public struct DashboardView: View {
+    @Query var statements: [BankStatement]
+    @Query var accounts: [BankAccount]
+
     public init() {}
+
+    var totalBalance: Decimal {
+        statements.compactMap { $0.summary?.availableBalance }.reduce(Decimal.zero, +)
+    }
+
+    var totalAccountingBalance: Decimal {
+        statements.compactMap { $0.summary?.accountingBalance }.reduce(Decimal.zero, +)
+    }
+
+    var totalDebits: Decimal {
+        statements.compactMap { $0.summary?.totalDebits }.reduce(Decimal.zero, +)
+    }
+
+    var totalCredits: Decimal {
+        statements.compactMap { $0.summary?.totalCredits }.reduce(Decimal.zero, +)
+    }
 
     public var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
-                        SummaryCard(title: "Saldo disponible", value: "$ 1.250.000")
-                        SummaryCard(title: "Saldo contable", value: "$ 1.285.000")
-                        SummaryCard(title: "Total cargos", value: "$ 120.000")
-                        SummaryCard(title: "Total abonos", value: "$ 155.000")
+                        SummaryCard(
+                            title: "Saldo disponible",
+                            value: totalBalance.formatted(.currency(code: "CLP"))
+                        )
+                        SummaryCard(
+                            title: "Saldo contable",
+                            value: totalAccountingBalance.formatted(.currency(code: "CLP"))
+                        )
+                        SummaryCard(
+                            title: "Total cargos",
+                            value: totalDebits.formatted(.currency(code: "CLP"))
+                        )
+                        SummaryCard(
+                            title: "Total abonos",
+                            value: totalCredits.formatted(.currency(code: "CLP"))
+                        )
                     }
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Líneas de crédito")
-                            .font(.headline)
-                        CreditLineCard(approved: 600_000, used: 170_000, available: 430_000)
+                    if let latestStatement = statements.last, let creditLine = latestStatement.creditLine {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Líneas de crédito")
+                                .font(.headline)
+                            CreditLineCard(
+                                approved: creditLine.approvedAmount,
+                                used: creditLine.usedAmount,
+                                available: creditLine.availableAmount
+                            )
+                        }
                     }
 
                     NavigationLink(destination: StatementsView()) {
@@ -27,6 +65,29 @@ public struct DashboardView: View {
                             .foregroundStyle(.white)
                             .background(Color.blue)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    if statements.isEmpty {
+                        VStack(alignment: .center, spacing: 12) {
+                            Image(systemName: "doc.badge.plus")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("Sin cartolas importadas")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            NavigationLink(destination: ImportStatementView()) {
+                                Text("Importar primera cartola")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .foregroundStyle(.white)
+                                    .background(Color.green)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                 }
                 .padding()
@@ -47,6 +108,7 @@ private struct SummaryCard: View {
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.title3.bold())
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -58,4 +120,5 @@ private struct SummaryCard: View {
 
 #Preview {
     DashboardView()
+        .modelContainer(for: BankStatement.self, inMemory: true)
 }
