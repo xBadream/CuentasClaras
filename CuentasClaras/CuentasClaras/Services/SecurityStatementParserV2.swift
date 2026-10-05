@@ -1,8 +1,8 @@
 import Foundation
 
-public enum TransactionClassification {
-    case debit(Decimal)
-    case credit(Decimal)
+public enum TransactionClassification: Equatable {
+    case debit
+    case credit
     case unclassified
 }
 
@@ -13,6 +13,15 @@ public enum SecurityStatementParserError: Error {
 
 public final class SecurityStatementParserV2 {
     private let dateFormatter = DateFormatter()
+
+    private struct ParsedLine {
+        let date: Date
+        let documentNumber: String
+        let description: String
+        let amount: Decimal
+        let classification: TransactionClassification
+        let resultingBalance: Decimal
+    }
 
     public init() {
         dateFormatter.locale = Locale(identifier: "es_CL")
@@ -40,7 +49,7 @@ public final class SecurityStatementParserV2 {
 
             guard let parsed = parseSecurityLine(line, previousBalance: runningBalance) else { continue }
 
-            let confidence = validateBalance(previousBalance: runningBalance, delta: parsed.amount, result: parsed.resultingBalance)
+            let confidence: Double = parsed.classification == .unclassified ? 0.72 : 0.98
             let requiresReview = confidence < 0.95
             if requiresReview { warnings.append(line) }
 
@@ -51,19 +60,8 @@ public final class SecurityStatementParserV2 {
                 amount: parsed.amount
             )
 
-            let effectiveDebit: Decimal?
-            let effectiveCredit: Decimal?
-
-            if parsed.classification == .debit {
-                effectiveDebit = parsed.amount
-                effectiveCredit = nil
-            } else if parsed.classification == .credit {
-                effectiveDebit = nil
-                effectiveCredit = parsed.amount
-            } else {
-                effectiveDebit = nil
-                effectiveCredit = nil
-            }
+            let effectiveDebit: Decimal? = parsed.classification == .debit ? parsed.amount : nil
+            let effectiveCredit: Decimal? = parsed.classification == .credit ? parsed.amount : nil
 
             transactions.append(ParsedTransaction(
                 date: parsed.date,
@@ -111,7 +109,8 @@ public final class SecurityStatementParserV2 {
         )
     }
 
-    private func parseSecurityLine(_ line: String, previousBalance: Decimal) -> (date: Date, documentNumber: String, description: String, amount: Decimal, classification: TransactionClassification, resultingBalance: Decimal)? {
+    // Formato esperado: <documento> [monto] <descripción> <dd/MM> [monto] <saldo>
+    private func parseSecurityLine(_ line: String, previousBalance: Decimal) -> ParsedLine? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -121,43 +120,47 @@ public final class SecurityStatementParserV2 {
         let documentNumber = tokens[0]
         guard isValidDocumentNumber(documentNumber) else { return nil }
 
-        guard let dateToken = tokens.first(where: { isDateToken($0) }) else { return nil }
-        guard let date = parseDate(dateToken) else { return nil }
-        guard let dateIndex = tokens.firstIndex(of: dateToken) else { return nil }
+        guard let dateIndex = tokens.firstIndex(where: { isDateToken($0) }) else { return nil }
+        guard let date = parseDate(tokens[dateIndex]) else { return nil }
 
-        let beforeDate = Array(tokens[0..<dateIndex])
-        let afterDate = Array(tokens[(dateIndex + 1)...])
+        var numericValues: [Decimal] = []
+        var descriptionTokens: [String] = []
+        for (index, token) in tokens.enumerated() {
+            if index == 0 || index == dateIndex { continue }
+            if let value = parseDecimal(token) {
+                numericValues.append(value)
+            } else {
+                descriptionTokens.append(token)
+            }
+        }
 
-        let amount = extractAmount(from: beforeDate + afterDate) ?? Decimal.zero
+        // El último número es el saldo; el anterior es el monto de la operación.
+        guard numericValues.count >= 2,
+              let resultingBalance = numericValues.last else { return nil }
+        let amount = numericValues[numericValues.count - 2]
         guard amount > 0 else { return nil }
 
-        let resultingBalance = extractBalance(from: tokens) ?? previousBalance
         let delta = resultingBalance - previousBalance
-
         let classification: TransactionClassification
-        if abs(delta + amount) < 0.01 {
-            classification = .debit(amount)
-        } else if abs(delta - amount) < 0.01 {
-            classification = .credit(amount)
+        if abs(NSDecimalNumber(decimal: delta + amount).doubleValue) < 0.01 {
+            classification = .debit
+        } else if abs(NSDecimalNumber(decimal: delta - amount).doubleValue) < 0.01 {
+            classification = .credit
         } else {
             classification = .unclassified
         }
 
-        let descriptionTokens = beforeDate.filter { $0 != documentNumber } + afterDate.filter { !isNumericToken($0) }
         let description = descriptionTokens.joined(separator: " ")
         guard !description.isEmpty else { return nil }
 
-        return (date, documentNumber, description, amount, classification, resultingBalance)
-    }
-
-    private func validateBalance(previousBalance: Decimal, delta: Decimal, result: Decimal) -> Double {
-        let expected1 = previousBalance - delta
-        let expected2 = previousBalance + delta
-
-        if abs(expected1 - result) < 0.01 || abs(expected2 - result) < 0.01 {
-            return 0.98
-        }
-        return 0.72
+        return ParsedLine(
+            date: date,
+            documentNumber: documentNumber,
+            description: description,
+            amount: amount,
+            classification: classification,
+            resultingBalance: resultingBalance
+        )
     }
 
     private func normalize(_ text: String) -> String {
@@ -185,7 +188,8 @@ public final class SecurityStatementParserV2 {
 
     private func extractPeriodStart(from lines: [String]) -> Date? {
         for line in lines {
-            if line.lowercased().contains("desde") || line.lowercased().contains("periodo") {
+            let lower = line.lowercased()
+            if lower.contains("desde") || lower.contains("periodo") {
                 if let date = extractDates(in: line).first { return date }
             }
         }
@@ -194,7 +198,8 @@ public final class SecurityStatementParserV2 {
 
     private func extractPeriodEnd(from lines: [String]) -> Date? {
         for line in lines {
-            if line.lowercased().contains("hasta") {
+            let lower = line.lowercased()
+            if lower.contains("hasta") || lower.contains("periodo") {
                 if let date = extractDates(in: line).last { return date }
             }
         }
@@ -203,7 +208,8 @@ public final class SecurityStatementParserV2 {
 
     private func extractOpeningBalance(from lines: [String]) -> Decimal? {
         for line in lines {
-            if line.lowercased().contains("saldo inicial") || line.lowercased().contains("saldoinicial") {
+            let lower = line.lowercased()
+            if lower.contains("saldo inicial") || lower.contains("saldoinicial") {
                 return extractAmount(from: line)
             }
         }
@@ -212,8 +218,8 @@ public final class SecurityStatementParserV2 {
 
     private func extractDates(in text: String) -> [Date] {
         let pattern = "\\b(\\d{2})/(\\d{2})(?:/(\\d{4}))?\\b"
-        let regex = try? NSRegularExpression(pattern: pattern)
-        guard let matches = regex?.matches(in: text, range: NSRange(text.startIndex..., in: text)) else { return [] }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
 
         var results: [Date] = []
         for match in matches {
@@ -225,38 +231,27 @@ public final class SecurityStatementParserV2 {
 
     private func extractAmount(from text: String) -> Decimal? {
         let pattern = "\\d{1,3}(?:\\.\\d{3})*(?:,\\d+)?"
-        let regex = try? NSRegularExpression(pattern: pattern)
-        guard let matches = regex?.matches(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
 
         for match in matches.reversed() {
             let raw = (text as NSString).substring(with: match.range)
-            let sanitized = raw.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
-            if let value = Decimal(string: sanitized), value > 0 { return value }
+            if let value = parseDecimal(raw), value > 0 { return value }
         }
         return nil
     }
 
-    private func extractBalance(from tokens: [String]) -> Decimal? {
-        let text = tokens.joined(separator: " ")
-        let pattern = "\\d{1,3}(?:\\.\\d{3})*(?:,\\d+)?"
-        let regex = try? NSRegularExpression(pattern: pattern)
-        guard let matches = regex?.matches(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
-
-        for match in matches.reversed() {
-            let raw = (text as NSString).substring(with: match.range)
-            let sanitized = raw.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
-            if let value = Decimal(string: sanitized) { return value }
+    private func parseDecimal(_ token: String) -> Decimal? {
+        // Solo números con formato chileno: 1.234.567 o 1.234,56
+        guard token.range(of: "^\\d{1,3}(\\.\\d{3})*(,\\d+)?$|^\\d+(,\\d+)?$", options: .regularExpression) != nil else {
+            return nil
         }
-        return nil
+        let sanitized = token.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
+        return Decimal(string: sanitized, locale: Locale(identifier: "en_US_POSIX"))
     }
 
     private func isDateToken(_ token: String) -> Bool {
         token.range(of: "^\\d{2}/\\d{2}$", options: .regularExpression) != nil
-    }
-
-    private func isNumericToken(_ token: String) -> Bool {
-        let sanitized = token.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
-        return Decimal(string: sanitized) != nil
     }
 
     private func isValidDocumentNumber(_ token: String) -> Bool {
@@ -264,6 +259,6 @@ public final class SecurityStatementParserV2 {
     }
 
     private func parseDate(_ raw: String) -> Date? {
-        dateFormatter.date(from: raw.count == 5 ? raw : String(raw.prefix(5)))
+        dateFormatter.date(from: String(raw.prefix(5)))
     }
 }
