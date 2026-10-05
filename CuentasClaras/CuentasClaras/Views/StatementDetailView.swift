@@ -16,7 +16,7 @@ public struct StatementDetailView: View {
                     LabeledContent("Saldo final", value: "$ 1.185.000")
                 }
                 .padding()
-                .background(Color(.secondarySystemBackground))
+                .background(Color.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 Text("Línea de crédito")
@@ -36,33 +36,6 @@ public struct StatementDetailView: View {
             .padding()
         }
         .navigationTitle("Detalle de cartola")
-    }
-}
-
-private struct CreditLineCard: View {
-    let approved: Decimal
-    let used: Decimal
-    let available: Decimal
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Crédito total")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text(approved.formatted(.currency(code: "CLP")))
-                .font(.title3.bold())
-            ProgressView(value: used / approved, total: 1)
-                .tint(.orange)
-            HStack {
-                Text("Usado: \(used.formatted(.currency(code: "CLP")))")
-                Spacer()
-                Text("Disponible: \(available.formatted(.currency(code: "CLP")))")
-            }
-            .font(.caption)
-        }
-        .padding()
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 

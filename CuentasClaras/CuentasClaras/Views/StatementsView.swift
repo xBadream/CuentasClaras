@@ -10,19 +10,12 @@ public struct StatementsView: View {
         }
         .navigationTitle("Cartolas")
         .toolbar {
-            #if os(iOS)
-            ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: ImportStatementView()) {
-                    Image(systemName: "square.and.arrow.down")
-                }
-            }
-            #else
             ToolbarItem(placement: .automatic) {
                 NavigationLink(destination: ImportStatementView()) {
                     Image(systemName: "square.and.arrow.down")
+                        .accessibilityLabel("Importar cartola")
                 }
             }
-            #endif
         }
     }
 }

@@ -1,7 +1,9 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 public struct ImportStatementView: View {
     @State private var showingFilePicker = false
+    @State private var selectedFileName: String?
 
     public init() {}
 
@@ -14,13 +16,15 @@ public struct ImportStatementView: View {
                 .foregroundStyle(.secondary)
 
             Button(action: { showingFilePicker = true }) {
-                HStack {
-                    Image(systemName: "doc.badge.plus")
-                    Text("Seleccionar PDF")
-                }
-                .frame(maxWidth: .infinity)
+                Label("Seleccionar PDF", systemImage: "doc.badge.plus")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+
+            if let selectedFileName {
+                Label(selectedFileName, systemImage: "doc.fill")
+                    .font(.callout)
+            }
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("Preview de cartola (ejemplo)")
@@ -34,17 +38,17 @@ public struct ImportStatementView: View {
                     LabeledContent("Advertencias", value: "2")
                 }
                 .padding()
-                .background(Color(.secondarySystemBackground))
+                .background(Color.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 Button("Confirmar importación") {
-                    // Acción de importación
+                    // TODO: conectar con EnhancedBankStatementImportCoordinator
                 }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
             }
             .padding()
-            .background(Color(.secondarySystemBackground))
+            .background(Color.cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 14))
 
             Spacer()
@@ -53,10 +57,10 @@ public struct ImportStatementView: View {
         .navigationTitle("Importar")
         .fileImporter(
             isPresented: $showingFilePicker,
-            allowedContentTypes: [.pdf],
+            allowedContentTypes: [UTType.pdf],
             onCompletion: { result in
                 if case .success(let url) = result {
-                    // Procesar PDF
+                    selectedFileName = url.lastPathComponent
                 }
             }
         )
