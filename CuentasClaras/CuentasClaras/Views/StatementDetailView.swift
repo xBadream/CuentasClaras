@@ -7,7 +7,8 @@ public struct StatementDetailView: View {
 
     public init(statement: BankStatement) {
         self.statement = statement
-        let predicate = #Predicate<Transaction> { $0.statement?.id == statement.id }
+        let statementID = statement.persistentModelID
+        let predicate = #Predicate<Transaction> { $0.statement?.persistentModelID == statementID }
         _transactions = Query(filter: predicate, sort: [SortDescriptor(\.date, order: .reverse)])
     }
 
@@ -19,10 +20,10 @@ public struct StatementDetailView: View {
 
                 if let summary = statement.summary {
                     VStack(alignment: .leading, spacing: 10) {
-                        LabeledContent("Saldo inicial", value: summary.openingBalance.formatted(.currency(code: "CLP")))
-                        LabeledContent("Abonos", value: summary.totalCredits.formatted(.currency(code: "CLP")))
-                        LabeledContent("Cargos", value: summary.totalDebits.formatted(.currency(code: "CLP")))
-                        LabeledContent("Saldo final", value: summary.accountingBalance.formatted(.currency(code: "CLP")))
+                        LabeledContent("Saldo inicial", value: summary.openingBalance.clp)
+                        LabeledContent("Abonos", value: summary.totalCredits.clp)
+                        LabeledContent("Cargos", value: summary.totalDebits.clp)
+                        LabeledContent("Saldo final", value: summary.accountingBalance.clp)
                     }
                     .padding()
                     .background(Color.cardBackground)
@@ -67,10 +68,11 @@ public struct StatementDetailView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(transactions.prefix(10)) { transaction in
+                        ForEach(transactions) { transaction in
                             NavigationLink(destination: TransactionDetailView(transaction: transaction)) {
                                 TransactionRowView(transaction: transaction)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -90,18 +92,18 @@ private struct TransactionRowView: View {
                 Text(transaction.transactionDescription)
                     .font(.subheadline.bold())
                     .lineLimit(1)
-                Text(formatDate(transaction.date))
+                Text(transaction.date.formatted(date: .numeric, time: .omitted))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
                 if let debit = transaction.debitAmount {
-                    Text("- \(debit.formatted(.currency(code: \"CLP\")))")
+                    Text("- \(debit.clp)")
                         .font(.subheadline.bold())
                         .foregroundStyle(.red)
                 } else if let credit = transaction.creditAmount {
-                    Text("+ \(credit.formatted(.currency(code: \"CLP\")))")
+                    Text("+ \(credit.clp)")
                         .font(.subheadline.bold())
                         .foregroundStyle(.green)
                 }
@@ -111,28 +113,5 @@ private struct TransactionRowView: View {
             }
         }
         .padding(.vertical, 4)
-    }
-
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "dd/MM/yyyy"
-        return formatter.string(from: date)
-    }
-}
-
-#Preview {
-    let container = try! ModelContainer(for: BankStatement.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-    let statement = BankStatement(
-        importFingerprint: "test",
-        statementNumber: "SEC-001",
-        periodStart: Date().addingTimeInterval(-30*24*3600),
-        periodEnd: Date(),
-        issueDate: Date(),
-        sourceFileName: "test.pdf"
-    )
-    container.mainContext.insert(statement)
-    return NavigationStack {
-        StatementDetailView(statement: statement)
-            .modelContainer(container)
     }
 }
