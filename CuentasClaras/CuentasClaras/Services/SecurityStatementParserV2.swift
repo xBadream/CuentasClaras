@@ -21,6 +21,8 @@ public final class SecurityStatementParserV2 {
         let amount: Decimal
         let classification: TransactionClassification
         let resultingBalance: Decimal
+        let order: Int
+        let hasDebitMarker: Bool
     }
 
     public init() {
@@ -29,29 +31,72 @@ public final class SecurityStatementParserV2 {
     }
 
     public func parse(_ text: String, sourceFileName: String) throws -> ParsedStatement {
-        let lines = normalize(text).split(whereSeparator: { $0.isNewline }).map(String.init)
+        let normalizedText = normalize(text)
+        let lines = normalizedText.split(whereSeparator: { $0.isNewline }).map(String.init)
         guard !lines.isEmpty else { throw SecurityStatementParserError.invalidFormat }
 
         let issueDate = extractIssueDate(from: lines) ?? Date()
         let statementNumber = extractStatementNumber(from: lines) ?? "SEC-UNKNOWN"
         let periodStart = extractPeriodStart(from: lines) ?? issueDate
         let periodEnd = extractPeriodEnd(from: lines) ?? issueDate
-        let openingBalance = extractOpeningBalance(from: lines) ?? Decimal.zero
+        let movements = parseSecurityMovementRows(normalizedText)
+        let orderedMovements = movements.sorted {
+            if $0.date == $1.date { return $0.order > $1.order }
+            return $0.date < $1.date
+        }
+        let openingBalance = extractOpeningBalance(from: lines)
+            ?? orderedMovements.first.map {
+                $0.hasDebitMarker ? $0.resultingBalance + $0.amount : $0.resultingBalance - $0.amount
+            }
+            ?? Decimal.zero
 
         var transactions: [ParsedTransaction] = []
         var warnings: [String] = []
         var runningBalance = openingBalance
 
-        for line in lines {
-            if line.lowercased().contains("total") || line.lowercased().contains("saldo") {
-                continue
+        let parsedLines: [(ParsedLine, String)]
+        if orderedMovements.isEmpty {
+            parsedLines = lines.compactMap { line in
+                guard !line.lowercased().contains("total"),
+                      !line.lowercased().contains("saldo"),
+                      let parsed = parseSecurityLine(line, previousBalance: runningBalance) else {
+                    return nil
+                }
+                return (parsed, line)
             }
+        } else {
+            parsedLines = orderedMovements.map { movement in
+                let delta = movement.resultingBalance - runningBalance
+                let classification: TransactionClassification
+                if abs(NSDecimalNumber(decimal: delta + movement.amount).doubleValue) < 0.01 {
+                    classification = .debit
+                } else if abs(NSDecimalNumber(decimal: delta - movement.amount).doubleValue) < 0.01 {
+                    classification = .credit
+                } else if movement.hasDebitMarker {
+                    classification = .debit
+                } else {
+                    classification = .unclassified
+                }
+                return (
+                    ParsedLine(
+                        date: movement.date,
+                        documentNumber: movement.documentNumber,
+                        description: movement.description,
+                        amount: movement.amount,
+                        classification: classification,
+                        resultingBalance: movement.resultingBalance,
+                        order: movement.order,
+                        hasDebitMarker: movement.hasDebitMarker
+                    ),
+                    movement.description
+                )
+            }
+        }
 
-            guard let parsed = parseSecurityLine(line, previousBalance: runningBalance) else { continue }
-
+        for (parsed, rawText) in parsedLines {
             let confidence: Double = parsed.classification == .unclassified ? 0.72 : 0.98
             let requiresReview = confidence < 0.95
-            if requiresReview { warnings.append(line) }
+            if requiresReview { warnings.append(rawText) }
 
             let fingerprint = FinancialHashing.transactionFingerprint(
                 documentNumber: parsed.documentNumber,
@@ -72,7 +117,7 @@ public final class SecurityStatementParserV2 {
                 resultingBalance: parsed.resultingBalance,
                 parserConfidence: confidence,
                 sourcePage: 1,
-                sourceRawText: line,
+                sourceRawText: rawText,
                 categoryName: nil,
                 requiresReview: requiresReview,
                 importFingerprint: fingerprint
@@ -159,14 +204,94 @@ public final class SecurityStatementParserV2 {
             description: description,
             amount: amount,
             classification: classification,
-            resultingBalance: resultingBalance
+            resultingBalance: resultingBalance,
+            order: 0,
+            hasDebitMarker: false
         )
+    }
+
+    private func parseSecurityMovementRows(_ text: String) -> [ParsedLine] {
+        guard let dateRegex = try? NSRegularExpression(
+            pattern: "\\d{2}[-/]\\d{2}[-/]\\d{4}"
+        ) else {
+            return []
+        }
+
+        let nsText = text as NSString
+        let dateMatches = dateRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        let documentRegex = try? NSRegularExpression(pattern: "\\b\\d{7,12}\\b")
+        let amountRegex = try? NSRegularExpression(
+            pattern: "\\$\\s*(\\d{1,3}(?:\\.\\d{3})*(?:,\\d+)?|\\d+(?:,\\d+)?)"
+        )
+
+        return dateMatches.enumerated().compactMap { index, dateMatch in
+            let segmentEnd = index + 1 < dateMatches.count
+                ? dateMatches[index + 1].range.location
+                : nsText.length
+            let segmentRange = NSRange(
+                location: dateMatch.range.location,
+                length: segmentEnd - dateMatch.range.location
+            )
+            let segment = nsText.substring(with: segmentRange)
+            let segmentNS = segment as NSString
+            guard let documentMatch = documentRegex?.firstMatch(
+                in: segment,
+                range: NSRange(location: 0, length: segmentNS.length)
+            ), let date = parseDate(segmentNS.substring(with: dateMatch.range.location - segmentRange.location ..< dateMatch.range.location - segmentRange.location + dateMatch.range.length)) else {
+                return nil
+            }
+
+            let documentNumber = segmentNS.substring(with: documentMatch.range)
+            let suffixStart = NSMaxRange(documentMatch.range)
+            let suffixRange = NSRange(location: suffixStart, length: segmentNS.length - suffixStart)
+            let suffix = segmentNS.substring(with: suffixRange)
+            guard let amountMatches = amountRegex?.matches(
+                in: suffix,
+                range: NSRange(location: 0, length: (suffix as NSString).length)
+            ), amountMatches.count >= 2 else {
+                return nil
+            }
+
+            let operationMatch = amountMatches[amountMatches.count - 2]
+            let balanceMatch = amountMatches[amountMatches.count - 1]
+            let suffixNS = suffix as NSString
+            let amountText = suffixNS.substring(with: operationMatch.range(at: 1))
+            let balanceText = suffixNS.substring(with: balanceMatch.range(at: 1))
+            guard let amount = parseDecimal(amountText),
+                  let resultingBalance = parseDecimal(balanceText),
+                  amount > 0 else {
+                return nil
+            }
+
+            let markerRange = NSRange(location: 0, length: operationMatch.range.location)
+            let hasDebitMarker = suffixNS.substring(with: markerRange).contains("-")
+            let descriptionRange = NSRange(
+                location: dateMatch.range.location + dateMatch.range.length - segmentRange.location,
+                length: documentMatch.range.location - (dateMatch.range.location + dateMatch.range.length - segmentRange.location)
+            )
+            let description = segmentNS.substring(with: descriptionRange)
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+            guard !description.isEmpty else { return nil }
+
+            return ParsedLine(
+                date: date,
+                documentNumber: documentNumber,
+                description: description,
+                amount: amount,
+                classification: .unclassified,
+                resultingBalance: resultingBalance,
+                order: index,
+                hasDebitMarker: hasDebitMarker
+            )
+        }
     }
 
     private func normalize(_ text: String) -> String {
         text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{00AD}", with: "-")
     }
 
     private func extractStatementNumber(from lines: [String]) -> String? {
@@ -213,11 +338,11 @@ public final class SecurityStatementParserV2 {
                 return extractAmount(from: line)
             }
         }
-        return Decimal.zero
+        return nil
     }
 
     private func extractDates(in text: String) -> [Date] {
-        let pattern = "\\b(\\d{2})/(\\d{2})(?:/(\\d{4}))?\\b"
+        let pattern = "\\b\\d{2}[-/]\\d{2}(?:[-/]\\d{4})?\\b"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
 
@@ -251,14 +376,19 @@ public final class SecurityStatementParserV2 {
     }
 
     private func isDateToken(_ token: String) -> Bool {
-        token.range(of: "^\\d{2}/\\d{2}$", options: .regularExpression) != nil
+        token.range(of: "^\\d{2}[-/]\\d{2}(?:[-/]\\d{4})?$", options: .regularExpression) != nil
     }
 
     private func isValidDocumentNumber(_ token: String) -> Bool {
-        token.range(of: "^\\d{7,10}$", options: .regularExpression) != nil
+        token.range(of: "^\\d{7,12}$", options: .regularExpression) != nil
     }
 
     private func parseDate(_ raw: String) -> Date? {
-        dateFormatter.date(from: String(raw.prefix(5)))
+        let normalized = raw.replacingOccurrences(of: "\u{00AD}", with: "-")
+        for format in ["dd-MM-yyyy", "dd/MM/yyyy", "dd-MM", "dd/MM"] {
+            dateFormatter.dateFormat = format
+            if let date = dateFormatter.date(from: normalized) { return date }
+        }
+        return nil
     }
 }
