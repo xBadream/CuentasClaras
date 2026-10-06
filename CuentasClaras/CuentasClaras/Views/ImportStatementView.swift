@@ -96,44 +96,10 @@ public struct ImportStatementView: View {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
 
-        do {
-            let extractor = PDFTextExtractor()
-            let rawText = try extractor.extractText(from: url)
-
-            let parser = SecurityStatementParserV2()
-            let parsed = try parser.parse(rawText, sourceFileName: url.lastPathComponent)
-
-            let validator = SecurityStatementValidator()
-            guard validator.isValid(parsed) else {
-                let messages = validator.validate(parsed).map { $0.message }
-                resultMessage = "Validación fallida:\n" + messages.joined(separator: "\n")
-                resultIsSuccess = false
-                showResult = true
-                return
-            }
-
-            let repository = StatementImportRepository(modelContext: modelContext)
-            if try repository.checkDuplicate(parsed.importFingerprint) {
-                resultMessage = "Esta cartola ya fue importada anteriormente."
-                resultIsSuccess = false
-                showResult = true
-                return
-            }
-
-            let statement = ParsedStatementMapper().map(parsed)
-            try repository.saveStatement(statement)
-
-            let balanceText = parsed.accountingBalance.clp
-            resultMessage = "Cartola importada exitosamente.\n\n"
-                + "Movimientos: \(parsed.transactions.count)\n"
-                + "Saldo: \(balanceText)"
-            resultIsSuccess = true
-            showResult = true
-            selectedURL = nil
-        } catch {
-            resultMessage = "Error al procesar: \(error.localizedDescription)"
-            resultIsSuccess = false
-            showResult = true
-        }
+        let outcome = StatementImportService.importStatement(at: url, into: modelContext)
+        resultMessage = outcome.message
+        resultIsSuccess = outcome.isSuccess
+        showResult = true
+        if outcome.isSuccess { selectedURL = nil }
     }
 }
