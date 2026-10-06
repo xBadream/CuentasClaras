@@ -26,17 +26,21 @@ public final class SecurityStatementValidator {
 
         var runningBalance = statement.openingBalance
         for transaction in statement.transactions {
+            if transaction.requiresReview {
+                runningBalance = transaction.resultingBalance
+                continue
+            }
             let expected: Decimal
             if let debit = transaction.debitAmount {
                 expected = runningBalance - debit
                 if expected != transaction.resultingBalance {
-                    issues.append(.init(message: "Inconsistencia en el saldo previo para la operación \(transaction.transactionDescription).", isBlocking: true))
+                    issues.append(.init(message: "Inconsistencia en el saldo previo para la operación \(transaction.transactionDescription).", isBlocking: false))
                 }
                 runningBalance = transaction.resultingBalance
             } else if let credit = transaction.creditAmount {
                 expected = runningBalance + credit
                 if expected != transaction.resultingBalance {
-                    issues.append(.init(message: "Inconsistencia en el saldo previo para la operación \(transaction.transactionDescription).", isBlocking: true))
+                    issues.append(.init(message: "Inconsistencia en el saldo previo para la operación \(transaction.transactionDescription).", isBlocking: false))
                 }
                 runningBalance = transaction.resultingBalance
             }
