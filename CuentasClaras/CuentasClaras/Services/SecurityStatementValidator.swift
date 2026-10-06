@@ -18,6 +18,10 @@ public final class SecurityStatementValidator {
 
         var runningBalance = statement.openingBalance
         for transaction in statement.transactions {
+            if transaction.requiresReview {
+                runningBalance = transaction.resultingBalance
+                continue
+            }
             let expected: Decimal
             if let debit = transaction.debitAmount {
                 expected = runningBalance - debit

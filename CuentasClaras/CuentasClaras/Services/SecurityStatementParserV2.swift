@@ -30,18 +30,33 @@ public final class SecurityStatementParserV2 {
     }
 
     public func parse(_ text: String, sourceFileName: String) throws -> ParsedStatement {
-        let lines = normalize(text).split(whereSeparator: { $0.isNewline }).map(String.init)
+        var lines = normalize(text).split(whereSeparator: { $0.isNewline }).map(String.init)
         guard !lines.isEmpty else { throw SecurityStatementParserError.invalidFormat }
 
         let issueDate = extractIssueDate(from: lines) ?? Date()
         let statementNumber = extractStatementNumber(from: lines) ?? "SEC-UNKNOWN"
         let periodStart = extractPeriodStart(from: lines) ?? issueDate
         let periodEnd = extractPeriodEnd(from: lines) ?? issueDate
-        let openingBalance = extractOpeningBalance(from: lines) ?? Decimal.zero
+        let declaredOpening = extractOpeningBalance(from: lines)
 
+        // Algunas cartolas listan los movimientos del más nuevo al más antiguo: ordenarlos cronológicamente.
+        let txIndices = lines.indices.filter { index in
+            let tokens = lines[index].split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            return tokens.first.map(isValidDocumentNumber) == true && tokens.contains(where: isDateToken)
+        }
+        let txDates: [Date] = txIndices.compactMap { index in
+            lines[index].split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                .first(where: isDateToken).flatMap(parseDate)
+        }
+        if let first = txDates.first, let last = txDates.last, first > last {
+            lines.reverse()
+        }
+
+        var openingBalance = declaredOpening ?? Decimal.zero
         var transactions: [ParsedTransaction] = []
         var warnings: [String] = []
         var runningBalance = openingBalance
+        var needsOpening = declaredOpening == nil
 
         for line in lines {
             let lower = line.lowercased()
@@ -50,7 +65,14 @@ public final class SecurityStatementParserV2 {
                 continue
             }
 
-            guard let parsed = parseSecurityLine(line, previousBalance: runningBalance) else { continue }
+            guard let parsed = parseSecurityLine(line, previousBalance: needsOpening ? nil : runningBalance) else { continue }
+
+            if needsOpening {
+                openingBalance = parsed.classification == .credit
+                    ? parsed.resultingBalance - parsed.amount
+                    : parsed.resultingBalance + parsed.amount
+                needsOpening = false
+            }
 
             let confidence: Double = parsed.inferred ? 0.72 : 0.98
             let requiresReview = confidence < 0.95
@@ -113,7 +135,7 @@ public final class SecurityStatementParserV2 {
     }
 
     // Formato esperado: <documento> [monto] <descripción> <dd/MM> [monto] <saldo>
-    private func parseSecurityLine(_ line: String, previousBalance: Decimal) -> ParsedLine? {
+    private func parseSecurityLine(_ line: String, previousBalance: Decimal?) -> ParsedLine? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -144,12 +166,16 @@ public final class SecurityStatementParserV2 {
         let amount = numericValues[numericValues.count - 2]
         guard amount > 0 else { return nil }
 
-        let delta = resultingBalance - previousBalance
         let classification: TransactionClassification
-        if abs(NSDecimalNumber(decimal: delta + amount).doubleValue) < 0.01 {
-            classification = .debit
-        } else if abs(NSDecimalNumber(decimal: delta - amount).doubleValue) < 0.01 {
-            classification = .credit
+        if let previousBalance = previousBalance {
+            let delta = resultingBalance - previousBalance
+            if abs(NSDecimalNumber(decimal: delta + amount).doubleValue) < 0.01 {
+                classification = .debit
+            } else if abs(NSDecimalNumber(decimal: delta - amount).doubleValue) < 0.01 {
+                classification = .credit
+            } else {
+                classification = .unclassified
+            }
         } else {
             classification = .unclassified
         }
@@ -228,7 +254,7 @@ public final class SecurityStatementParserV2 {
                 return extractAmount(from: line)
             }
         }
-        return Decimal.zero
+        return nil
     }
 
     private func extractDates(in text: String) -> [Date] {
