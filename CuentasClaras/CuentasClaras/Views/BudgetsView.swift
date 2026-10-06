@@ -10,6 +10,10 @@ struct BudgetsView: View {
         NavigationStack {
             List {
                 Section {
+                    Text("Gastos de \(viewModel.budgetMonth.formatted(.dateTime.month(.wide).year()))")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
                     ForEach(BudgetCategory.allCases) { category in
                         Button {
                             editingCategory = category
@@ -101,7 +105,10 @@ private struct EditBudgetSheet: View {
                         .keyboardType(.numberPad)
                 }
                 Section {
-                    LabeledContent("Gastado este mes", value: viewModel.spent(for: category).clp)
+                    LabeledContent(
+                        "Gastado en \(viewModel.budgetMonth.formatted(.dateTime.month(.wide).year()))",
+                        value: viewModel.spent(for: category).clp
+                    )
                 }
                 Section {
                     Button("Restablecer valor por defecto", role: .destructive) {

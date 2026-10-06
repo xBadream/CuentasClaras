@@ -25,9 +25,14 @@ final class FinanceViewModel {
         budgetLimits[category] ?? category.defaultLimit
     }
 
+    var budgetMonth: Date {
+        transactions.max(by: { $0.date < $1.date })?.date ?? .now
+    }
+
     /// Gasto (débitos) del mes indicado en la categoría.
-    func spent(for category: BudgetCategory, in month: Date = .now) -> Decimal {
+    func spent(for category: BudgetCategory, in month: Date? = nil) -> Decimal {
         let calendar = Calendar.current
+        let month = month ?? budgetMonth
         return transactions
             .filter { calendar.isDate($0.date, equalTo: month, toGranularity: .month) && resolvedCategory(of: $0) == category }
             .reduce(Decimal.zero) { $0 + ($1.debitAmount ?? 0) }
