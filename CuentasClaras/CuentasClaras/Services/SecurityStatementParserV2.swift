@@ -21,6 +21,7 @@ public final class SecurityStatementParserV2 {
         let amount: Decimal
         let classification: TransactionClassification
         let resultingBalance: Decimal
+        let inferred: Bool
     }
 
     public init() {
@@ -43,13 +44,15 @@ public final class SecurityStatementParserV2 {
         var runningBalance = openingBalance
 
         for line in lines {
-            if line.lowercased().contains("total") || line.lowercased().contains("saldo") {
+            let lower = line.lowercased()
+            let firstToken = line.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+            if (lower.contains("total") || lower.contains("saldo")) && !isValidDocumentNumber(firstToken) {
                 continue
             }
 
             guard let parsed = parseSecurityLine(line, previousBalance: runningBalance) else { continue }
 
-            let confidence: Double = parsed.classification == .unclassified ? 0.72 : 0.98
+            let confidence: Double = parsed.inferred ? 0.72 : 0.98
             let requiresReview = confidence < 0.95
             if requiresReview { warnings.append(line) }
 
@@ -114,7 +117,8 @@ public final class SecurityStatementParserV2 {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        let tokens = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        let tokens = trimmed.replacingOccurrences(of: "$", with: " ")
+            .split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard tokens.count >= 4 else { return nil }
 
         let documentNumber = tokens[0]
@@ -153,13 +157,24 @@ public final class SecurityStatementParserV2 {
         let description = descriptionTokens.joined(separator: " ")
         guard !description.isEmpty else { return nil }
 
+        // Si el saldo previo es desconocido, inferir por la descripción para no dejar montos en 0.
+        let finalClassification: TransactionClassification
+        if classification == .unclassified {
+            let upper = description.uppercased()
+            let creditHints = ["ABONO", "DEPOSITO", "DEPÓSITO", "DESDE", "SUELDO", "REMUNERACION", "REMUNERACIÓN", "INTERES GANADO", "INTERÉS GANADO"]
+            finalClassification = creditHints.contains(where: { upper.contains($0) }) ? .credit : .debit
+        } else {
+            finalClassification = classification
+        }
+
         return ParsedLine(
             date: date,
             documentNumber: documentNumber,
             description: description,
             amount: amount,
-            classification: classification,
-            resultingBalance: resultingBalance
+            classification: finalClassification,
+            resultingBalance: resultingBalance,
+            inferred: classification == .unclassified
         )
     }
 
