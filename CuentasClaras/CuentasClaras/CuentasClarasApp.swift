@@ -4,6 +4,7 @@ import SwiftData
 @main
 struct CuentasClarasApp: App {
     let container: ModelContainer
+    @State private var financeViewModel = FinanceViewModel()
 
     init() {
         let schema = Schema([
@@ -23,8 +24,14 @@ struct CuentasClarasApp: App {
 
     var body: some Scene {
         WindowGroup {
-            DashboardView()
-                .modelContainer(container)
+            TabView {
+                DashboardView()
+                    .tabItem { Label("Resumen", systemImage: "house.fill") }
+                BudgetsView()
+                    .tabItem { Label("Presupuestos", systemImage: "chart.pie.fill") }
+            }
+            .environment(financeViewModel)
+            .modelContainer(container)
         }
     }
 }
