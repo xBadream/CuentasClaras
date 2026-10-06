@@ -56,17 +56,20 @@ public final class SecurityStatementParserV2 {
 
         let parsedLines: [(ParsedLine, String)]
         if orderedMovements.isEmpty {
+            var previousBalance = runningBalance
             parsedLines = lines.compactMap { line in
                 guard !line.lowercased().contains("total"),
                       !line.lowercased().contains("saldo"),
-                      let parsed = parseSecurityLine(line, previousBalance: runningBalance) else {
+                      let parsed = parseSecurityLine(line, previousBalance: previousBalance) else {
                     return nil
                 }
+                previousBalance = parsed.resultingBalance
                 return (parsed, line)
             }
         } else {
+            var previousBalance = runningBalance
             parsedLines = orderedMovements.map { movement in
-                let delta = movement.resultingBalance - runningBalance
+                let delta = movement.resultingBalance - previousBalance
                 let classification: TransactionClassification
                 if abs(NSDecimalNumber(decimal: delta + movement.amount).doubleValue) < 0.01 {
                     classification = .debit
@@ -77,6 +80,7 @@ public final class SecurityStatementParserV2 {
                 } else {
                     classification = .unclassified
                 }
+                previousBalance = movement.resultingBalance
                 return (
                     ParsedLine(
                         date: movement.date,
@@ -92,6 +96,7 @@ public final class SecurityStatementParserV2 {
                 )
             }
         }
+        runningBalance = openingBalance
 
         for (parsed, rawText) in parsedLines {
             let confidence: Double = parsed.classification == .unclassified ? 0.72 : 0.98
@@ -211,14 +216,24 @@ public final class SecurityStatementParserV2 {
     }
 
     private func parseSecurityMovementRows(_ text: String) -> [ParsedLine] {
+        let tableStart = text.range(
+            of: "descripción del movimiento",
+            options: [.caseInsensitive, .diacriticInsensitive]
+        )?.upperBound ?? text.range(
+            of: "saldos y movimientos",
+            options: [.caseInsensitive, .diacriticInsensitive]
+        )?.upperBound
+        guard let tableStart else { return [] }
+        let movementText = String(text[tableStart...])
+
         guard let dateRegex = try? NSRegularExpression(
             pattern: "\\d{2}[-/]\\d{2}[-/]\\d{4}"
         ) else {
             return []
         }
 
-        let nsText = text as NSString
-        let dateMatches = dateRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        let nsText = movementText as NSString
+        let dateMatches = dateRegex.matches(in: movementText, range: NSRange(location: 0, length: nsText.length))
         let documentRegex = try? NSRegularExpression(pattern: "\\b\\d{7,12}\\b")
         let amountRegex = try? NSRegularExpression(
             pattern: "\\$\\s*(\\d{1,3}(?:\\.\\d{3})*(?:,\\d+)?|\\d+(?:,\\d+)?)"
@@ -237,7 +252,7 @@ public final class SecurityStatementParserV2 {
             guard let documentMatch = documentRegex?.firstMatch(
                 in: segment,
                 range: NSRange(location: 0, length: segmentNS.length)
-            ), let date = parseDate(segmentNS.substring(with: dateMatch.range.location - segmentRange.location ..< dateMatch.range.location - segmentRange.location + dateMatch.range.length)) else {
+            ), let date = parseDate(segmentNS.substring(with: NSRange(location: 0, length: dateMatch.range.length))) else {
                 return nil
             }
 
@@ -266,8 +281,8 @@ public final class SecurityStatementParserV2 {
             let markerRange = NSRange(location: 0, length: operationMatch.range.location)
             let hasDebitMarker = suffixNS.substring(with: markerRange).contains("-")
             let descriptionRange = NSRange(
-                location: dateMatch.range.location + dateMatch.range.length - segmentRange.location,
-                length: documentMatch.range.location - (dateMatch.range.location + dateMatch.range.length - segmentRange.location)
+                location: dateMatch.range.length,
+                length: documentMatch.range.location - dateMatch.range.length
             )
             let description = segmentNS.substring(with: descriptionRange)
                 .split(whereSeparator: { $0.isWhitespace })
