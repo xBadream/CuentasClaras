@@ -32,6 +32,9 @@ struct CuentasClarasApp: App {
             }
             .environment(financeViewModel)
             .modelContainer(container)
+            .task {
+                StatementImportService.importBundledStatement(into: container.mainContext)
+            }
         }
     }
 }
