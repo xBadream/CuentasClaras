@@ -11,6 +11,14 @@ public final class SecurityStatementValidator {
     public func validate(_ statement: ParsedStatement) -> [StatementValidationIssue] {
         var issues: [StatementValidationIssue] = []
 
+        if statement.transactions.isEmpty && statement.openingBalance == 0 {
+            issues.append(.init(
+                message: "La cartola no contiene movimientos ni un saldo inicial legible.",
+                isBlocking: true
+            ))
+            return issues
+        }
+
         let computedBalance = statement.openingBalance + statement.totalCredits - statement.totalDebits
         if computedBalance != statement.accountingBalance {
             issues.append(.init(message: "La suma contable no coincide con el saldo final del extracto.", isBlocking: true))

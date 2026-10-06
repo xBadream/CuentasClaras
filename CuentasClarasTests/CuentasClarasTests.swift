@@ -30,6 +30,74 @@ final class SecurityBankParsingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(parsed.transactions.count, 1)
     }
 
+    func testParsesSecurityColumnarRowsInChronologicalOrder() throws {
+        let sample = """
+        Cuenta Corriente
+        Emitido 04-10-2026
+        Número de cuenta 918443560 Saldo contable $ 3.994.460
+        Desde 01-09-2026 Hasta el 30-09-2026
+        Saldos y movimientos
+        Fecha Descripción del movimiento Nº documento Cargos Abonos Saldo
+        30\u{00AD}09\u{00AD}2026
+        COMPRA AP BUIN
+        00000126434
+        \u{00AD}$ 24.000
+        $ 8.047.847
+        30\u{00AD}09\u{00AD}2026
+        COMPRA CAMION 7
+        00000176497
+        \u{00AD}$ 54.600
+        $ 8.071.847
+        30\u{00AD}09\u{00AD}2026
+        COMPRA CUGAT BUIN
+        00000114551
+        \u{00AD}$ 99.189
+        $ 8.126.447
+        30\u{00AD}09\u{00AD}2026
+        TRANSFERENCIA DESDE Chile DE Judith Aravena
+        01034181537
+        $ 339.400
+        $ 8.225.636
+        29\u{00AD}09\u{00AD}2026
+        ABONO DE REMUNERACIONES
+        00000000000
+        $ 7.880.192
+        $ 7.886.236
+        """
+
+        let parsed = try parser.parse(sample, sourceFileName: "security-columnar.pdf")
+
+        XCTAssertEqual(parsed.openingBalance, Decimal(6_044))
+        XCTAssertEqual(parsed.transactions.count, 5)
+        XCTAssertEqual(parsed.totalDebits, Decimal(177_789))
+        XCTAssertEqual(parsed.totalCredits, Decimal(8_219_592))
+        XCTAssertEqual(parsed.accountingBalance, Decimal(8_047_847))
+        XCTAssertEqual(parsed.transactions.first?.transactionDescription, "ABONO DE REMUNERACIONES")
+        XCTAssertEqual(parsed.transactions.last?.transactionDescription, "COMPRA AP BUIN")
+        XCTAssertTrue(SecurityStatementValidator().isValid(parsed))
+    }
+
+    func testRejectsEmptyZeroBalanceStatement() {
+        let statement = ParsedStatement(
+            statementNumber: "SEC-EMPTY",
+            periodStart: Date(),
+            periodEnd: Date(),
+            issueDate: Date(),
+            sourceFileName: "empty.pdf",
+            openingBalance: 0,
+            totalDebits: 0,
+            totalCredits: 0,
+            accountingBalance: 0,
+            availableBalance: 0,
+            totalFees: 0,
+            transactions: [],
+            warnings: [],
+            importFingerprint: "empty"
+        )
+
+        XCTAssertFalse(SecurityStatementValidator().isValid(statement))
+    }
+
     func testValidatesAccountingEquality() throws {
         let validator = SecurityStatementValidator()
         let statement = ParsedStatement(
